@@ -228,9 +228,52 @@ already have active polecats working on them.
 **Exit criteria:** All gate-ready molecules dispatched to polecats."""
 
 [[steps]]
+id = "check-stranded-convoys"
+title = "Dispatch stranded convoys"
+needs = ["inbox-check"]
+description = """
+Check for stranded convoys and dispatch work.
+
+Convoys can become stranded when polecats crash, context cycles, or workers fail
+to pick up synthesized issues. This step detects stranded convoys and dispatches
+work to get them moving again.
+
+**Step 1: Detect stranded convoys**
+```bash
+gt convoy stranded
+```
+
+This shows convoys where:
+- Status is open
+- Has synthesized issues waiting for work
+- No polecat currently has the work hooked
+
+**Step 2: If stranded convoys found, dispatch via mol-convoy-feed**
+
+For each stranded convoy:
+```bash
+# Dispatch the convoy-feed formula to process stranded work
+gt sling mol-convoy-feed <rig>/polecats --var convoy_id=<convoy-id>
+```
+
+Alternatively, if multiple convoys are stranded:
+```bash
+# Run convoy-feed for all stranded
+gt convoy feed --all
+```
+
+**Step 3: Log dispatch**
+Note which convoys were dispatched for observability.
+
+**If no stranded convoys:**
+Skip - all convoys have active workers or are complete.
+
+**Exit criteria:** All stranded convoys have work dispatched."""
+
+[[steps]]
 id = "check-convoy-completion"
 title = "Check convoy completion"
-needs = ["inbox-check"]
+needs = ["check-stranded-convoys"]
 description = """
 Check convoy completion status.
 
