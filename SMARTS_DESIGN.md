@@ -1,337 +1,347 @@
-# Adding Smarts to Gastown: Design Document
+# Adding Smarts to Gastown: Design Document v2
 
-> Research findings and implementation proposal for adding review loops,
-> quality gates, and revision limits to Gastown.
-
-## Executive Summary
-
-Gastown already has significant infrastructure for "smarts" that Kyle may not be aware of. The key gap is **not** the primitives (formulas, gates, validation) but their **integration and activation**. This document proposes leveraging existing infrastructure with targeted enhancements.
+> Updated after feedback: Focus on discoverability, custom formulas, and
+> what can be fixed via formulas alone vs Go code changes.
 
 ---
 
-## Current Infrastructure (Already Exists!)
+## Problem Statement
 
-### 1. Formula System (`internal/formula/`)
+Kyle has identified several issues:
 
-Gastown already has sophisticated workflow templates:
+1. **No enforcement** - Formulas exist but agents don't automatically use them
+2. **Not discoverable** - Unclear how to tell Mayor to use formulas
+3. **Custom formula location** - Where to store private formulas without polluting gastown repo?
+4. **Revision loops needed at EVERY stage** - Not just PR review, but design review, spec review, etc.
+5. **Validation at every step** - "If step says create a file, validate it created the file"
 
-| Formula | Type | Purpose |
-|---------|------|---------|
-| `shiny.formula.toml` | workflow | design → implement → review → test → submit |
-| `shiny-enterprise.formula.toml` | workflow | extends shiny with rule-of-five refinements |
-| `code-review.formula.toml` | convoy | 10-leg parallel review (correctness, security, performance, etc.) |
-| `rule-of-five.formula.toml` | expansion | 4-5 iterative refinement passes |
+---
 
-**Key insight**: The `shiny` formula IS Kyle's `/prd-jam → /eng-spec → /execute` pattern!
-- `design` step = `/prd-jam` + `/eng-spec`
-- `implement` step = `/execute`
-- `review` step = revision check
-- `test` step = validation
-- `submit` step = `gt done`
+## Formula Search Paths (Where Custom Formulas Go)
 
-### 2. Gate System (`internal/cmd/gate.go`)
+Formulas are discovered from these paths **in order**:
 
-Gates enable async coordination between workflow steps:
+```
+1. .beads/formulas/           # Project-level (current rig's worktree)
+2. ~/.beads/formulas/         # User-level (private custom formulas)
+3. $GT_ROOT/.beads/formulas/  # Town-level (shared across all rigs)
+```
 
+**For Kyle's private formulas:** Use `~/.beads/formulas/` or `/home/orangepi/gt/.beads/formulas/`
+
+Current formula locations:
+| Location | Count | Purpose |
+|----------|-------|---------|
+| `/home/orangepi/gt/.beads/formulas/` | 35 | Town-level shared formulas |
+| `/home/orangepi/gt/gastown/refinery/rig/.beads/formulas/` | 32 | Gastown rig formulas (synced from internal/) |
+| `/home/orangepi/gt/gastown/refinery/rig/internal/formula/formulas/` | 32 | Source formulas (compiled into Go) |
+
+**Custom formula workflow:**
 ```bash
-bd gate create --type=timer --duration=1h     # Timer gate
-bd gate create --type=gh:run --ref=main       # GitHub Actions gate
-bd gate create --type=human --approver=kyle   # Human approval gate
-bd gate create --type=mail --waiting=agent    # Mail notification gate
+# Create custom formula in user directory
+gt formula create my-workflow          # Creates in .beads/formulas/ (project)
+
+# Or manually create in user-level (private, not in any repo):
+touch ~/.beads/formulas/kyle-review.formula.toml
+
+# List all formulas (shows search path order)
+bd formula list
 ```
-
-**Features**:
-- Waiter registration (agents wait for gate)
-- Wake notifications (`gt gate wake`)
-- Integration with Deacon patrol
-
-### 3. Refinery Validation (`internal/refinery/engineer.go`)
-
-The merge queue already supports:
-- Conflict detection and resolution workflow
-- Test execution (`RunTests` + `TestCommand` in config)
-- Retry for flaky tests (`RetryFlakyTests`)
-- Branch cleanup
-
-**Configuration** in `<rig>/config.json`:
-```json
-{
-  "merge_queue": {
-    "enabled": true,
-    "run_tests": true,
-    "test_command": "make test",
-    "retry_flaky_tests": 2
-  }
-}
-```
-
-### 4. Pre-Submission Validation (`internal/cmd/done.go`)
-
-`gt done` already validates before MR submission:
-- ✅ Uncommitted changes check
-- ✅ Branch pushed to origin
-- ✅ Work exists (commits ahead of main)
-- ✅ Role guard (polecats only)
 
 ---
 
-## What's Missing (The Gaps)
+## Available Formulas (32 total)
 
-### Gap 1: No Automated Review Loop Before Submit
+### Workflow Formulas (Sequential Steps)
+| Formula | Description | Vars |
+|---------|-------------|------|
+| `shiny` | Engineer in a Box: design → implement → review → test → submit | feature, assignee |
+| `shiny-enterprise` | Shiny + rule-of-five expansion on implement | - |
+| `shiny-secure` | Shiny + security-audit aspect | - |
+| `beads-release` | Release workflow for beads | version |
+| `gastown-release` | Release workflow for gastown | version |
+| `mol-polecat-work` | Full polecat lifecycle from assignment to completion | issue |
 
-The `review` step in `shiny.formula.toml` is just instructions - it doesn't actually run the `code-review` convoy.
+### Convoy Formulas (Parallel Legs)
+| Formula | Description | Legs |
+|---------|-------------|------|
+| `code-review` | Parallel code review (10 legs) | correctness, performance, security, elegance, resilience, style, smells, wiring, commit-discipline, test-quality |
+| `design` | Parallel design exploration (6 legs) | api, data, ux, scale, security, integration |
 
-**Fix**: Connect `review` step to actually execute `code-review.formula.toml` (gate preset).
+### Expansion Formulas (Step Templates)
+| Formula | Description |
+|---------|-------------|
+| `rule-of-five` | 4-5 iterative refinements: draft → correctness → clarity → edge cases → excellence |
 
-### Gap 2: No Revision Limits with Escalation
+### Aspect Formulas (Cross-cutting Concerns)
+| Formula | Description |
+|---------|-------------|
+| `security-audit` | Security scanning aspect applied to workflows |
 
-Kyle's claude-life-dev has "max 3 revisions before escalation". Gastown has no such mechanism.
-
-**Fix**: Add revision tracking to MR beads, gate after N cycles, auto-escalate.
-
-### Gap 3: Quality Checks Are Optional and External
-
-Tests run only if configured. No lint, type check, security scan integration.
-
-**Fix**: Create `gt validate` command with pluggable checks, integrate into `gt done`.
-
-### Gap 4: No Human-in-the-Loop for Critical Work
-
-Polecats run autonomously. No approval gates for high-risk changes.
-
-**Fix**: Use existing `human` gate type, add to enterprise workflow formulas.
+### Molecule Formulas (Daemon Patrols)
+| Formula | Purpose |
+|---------|---------|
+| `mol-deacon-patrol` | Mayor's daemon patrol loop |
+| `mol-witness-patrol` | Per-rig worker monitor |
+| `mol-refinery-patrol` | Merge queue processor patrol |
+| `mol-polecat-code-review` | Code review for polecats |
+| `mol-polecat-conflict-resolve` | Conflict resolution workflow |
+| `mol-polecat-review-pr` | PR review workflow |
 
 ---
 
-## Design Proposal
+## Mapping: Kyle's claude-life-dev → Gastown Formulas
 
-### Phase 1: Pre-Submission Validation Framework
+| Kyle's Command | Gastown Equivalent | Gap |
+|----------------|-------------------|-----|
+| `/prd-jam` | `design` convoy (parallel exploration) | PRD format not in formula |
+| `/eng-spec` | `shiny.design` step + worktree setup | Worktree creation not in formula |
+| `/execute` | `shiny.implement` + `rule-of-five` | Ralph loop not in formula |
+| PR Review | `code-review` convoy | ✅ Already exists |
+| PR Revision | `mol-polecat-review-pr` | Revision limits not enforced |
 
-**New command**: `gt validate`
+### Behavioral Instructions to Extract into Formulas
 
-```bash
-gt validate                    # Run all configured validators
-gt validate --check=lint       # Run specific check
-gt validate --list             # List available validators
-```
+From Kyle's commands, these behavioral patterns need formula representation:
 
-**Validators** (pluggable via rig config):
-- `lint` - Run linter (golangci-lint, eslint, etc.)
-- `typecheck` - Run type checker
-- `test` - Run test suite
-- `coverage` - Check test coverage threshold
-- `security` - Run security scanner (gosec, npm audit, etc.)
-- `size` - Check PR size limits
-
-**Config** (`<rig>/config.json`):
-```json
-{
-  "validators": {
-    "lint": {
-      "command": "golangci-lint run",
-      "required": true
-    },
-    "test": {
-      "command": "go test ./...",
-      "required": true
-    },
-    "coverage": {
-      "command": "go test -coverprofile=c.out && go tool cover -func=c.out",
-      "threshold": 80,
-      "required": false
-    }
-  }
-}
-```
-
-**Integration with `gt done`**:
-```go
-// In runDone(), before MR creation:
-if err := runValidators(cwd); err != nil {
-    return fmt.Errorf("validation failed: %w\n\nFix issues and retry, or use --skip-validate to bypass")
-}
-```
-
-### Phase 2: Review Gate Integration
-
-**Enhanced `shiny-review.formula.toml`**:
+**1. Investigate-First Principle** (from prd-jam)
 ```toml
-formula = "shiny-review"
+# Before asking questions, explore the codebase
+# If you can investigate, do it. Don't ask for permission.
+```
+
+**2. Role Division** (from eng-spec)
+```toml
+# Claude handles: architecture, patterns, file structure, tests
+# PM handles: user impact, UX decisions, priority trade-offs
+# Rule: Never ask the user a technical question. Make the decision.
+```
+
+**3. Quality Gates** (from execute)
+```toml
+# PRD is ready when:
+# - Problem is clear (from your investigation)
+# - Scope has boundaries
+# - Requirements have acceptance criteria
+
+# PRD is NOT ready if:
+# - You haven't looked at the codebase
+# - You asked more than 2-3 questions
+```
+
+**4. Validation Protocol** (from execute)
+```toml
+# HARD FAIL: Cannot execute on main/master branch
+# HARD FAIL: Must be in a worktree (not the main checkout)
+# Check plan exists: SPEC.md, TODO.md, PROMPT.md
+```
+
+---
+
+## Gap Analysis: What Can Be Fixed via Formulas vs Go Code
+
+### ✅ Can Be Fixed with Formulas Alone
+
+| Issue | Formula Solution |
+|-------|------------------|
+| Design review before implement | Add `design-review` step with human gate after `design` |
+| Spec review before implement | Add `spec-review` step that runs parallel review |
+| Code review before submit | Already exists: `code-review` convoy |
+| Security audit on sensitive code | Already exists: `shiny-secure` |
+| Rule-of-five refinement | Already exists: `shiny-enterprise` |
+
+**Example: Design Review Formula**
+```toml
+# kyle-design-review.formula.toml
+formula = "kyle-design-review"
 type = "workflow"
 extends = ["shiny"]
 
-# Override review step to run actual code review
 [[steps]]
-id = "review"
-title = "Automated Code Review"
-needs = ["implement"]
-description = """
-Run the code-review convoy (gate preset) on your changes.
-This produces a review summary at .reviews/<review-id>/review-summary.md
+id = "design"
+title = "Create design spec"
+description = "Create engineering specification"
 
-Steps:
-1. Create review: gt formula run code-review --preset=gate --files="$(git diff --name-only main)"
-2. Wait for review completion
-3. Address any P0/P1 issues before proceeding
-4. If issues found, return to 'implement' step
+[[steps]]
+id = "design-review"
+title = "Review design with second agent"
+needs = ["design"]
+gate = { type = "human" }  # Or spawn a review convoy
+description = """
+Before implementing, have another agent review the design.
+Run: gt formula run code-review --preset=gate --files=<spec-files>
+Review findings. Address P0/P1 issues before proceeding.
 """
 
 [[steps]]
-id = "review-gate"
-title = "Review Approval Gate"
-needs = ["review"]
-gate = { type = "human", approver = "self" }
-description = """
-Confirm you've addressed review findings.
-Close this gate when ready to proceed to testing.
-"""
+id = "implement"
+title = "Implement (with rule-of-five)"
+needs = ["design-review"]
+# ... rest of shiny steps
 ```
 
-### Phase 3: Revision Limits with Escalation
+### ❌ Cannot Be Fixed with Formulas - Needs Go Code
 
-**MR Bead Enhancement**:
-```
-# In MR description (already tracked):
-retry_count: 0
-last_conflict_sha: null
-conflict_task_id: null
+| Issue | Why Formulas Can't Fix | Go Change Needed |
+|-------|------------------------|------------------|
+| **Discoverability**: How to tell Mayor to use formulas | No command to set default formula | Add `gt config set default-formula <name>` |
+| **Enforcement**: Polecats don't auto-use formulas | Witness dispatches without formula | Witness assigns formula with issue |
+| **Validation at every step**: "Check file was created" | No step validator in formula spec | Add `[steps.validate]` section to formula schema |
+| **Revision limits**: Max 3 revisions then escalate | No revision counter in MR processing | Add `revision_count` tracking + escalation in Refinery |
+| **Pre-submit validation**: Tests/lint before `gt done` | `gt done` has no validation hooks | Add `gt validate` command + hook in `done.go` |
 
-# New fields:
-revision_count: 0
-max_revisions: 3
-escalated_at: null
-escalated_to: null
-```
+---
 
-**Refinery Logic** (`engineer.go`):
+## What Needs to Change in Go Code
+
+### 1. Formula Enforcement (Witness Integration)
+
+**File**: `internal/cmd/sling.go` or `internal/protocol/witness.go`
+
+When Witness dispatches work:
 ```go
-func (e *Engineer) HandleMRInfoFailure(mr *MRInfo, result ProcessResult) {
-    // Increment revision count
-    mr.RevisionCount++
+// Current: Just slings the issue
+gt sling <issue> <polecat>
 
-    // Check escalation threshold
+// Needed: Sling with formula
+gt sling <issue> <polecat> --formula shiny
+// Or: Check rig config for default formula
+```
+
+### 2. Step Validation (Formula Schema Extension)
+
+**File**: `internal/formula/types.go`
+
+Add validation section to steps:
+```toml
+[[steps]]
+id = "implement"
+title = "Implement feature"
+[steps.validate]
+files_created = ["src/new-feature.ts"]
+files_modified = ["src/index.ts"]
+command = "go build ./..."
+exit_on_fail = true
+escalate_to = "witness"
+```
+
+### 3. Revision Limits (Refinery Enhancement)
+
+**File**: `internal/refinery/engineer.go`
+
+```go
+type MRInfo struct {
+    // ... existing fields
+    RevisionCount  int    // Track revisions
+    MaxRevisions   int    // Default: 3
+    EscalatedAt    *time.Time
+    EscalatedTo    string
+}
+
+func (e *Engineer) HandleMRInfoFailure(mr *MRInfo, result ProcessResult) {
+    mr.RevisionCount++
     if mr.RevisionCount >= mr.MaxRevisions {
-        // Create escalation
-        e.escalateToHuman(mr, fmt.Sprintf(
-            "MR has been revised %d times. Review needed.",
-            mr.RevisionCount))
+        e.escalateToHuman(mr, "Max revisions exceeded")
         return
     }
-
-    // Normal failure handling...
+    // ... normal failure handling
 }
 ```
 
-### Phase 4: Enterprise Workflow Template
+### 4. Pre-Submit Validation (`gt validate`)
 
-**`shiny-enterprise-reviewed.formula.toml`**:
-```toml
-description = "Full enterprise workflow with automated review and human gates"
-formula = "shiny-enterprise-reviewed"
-type = "workflow"
-version = 1
-extends = ["shiny"]
+**File**: `internal/cmd/validate.go` (new) + `internal/cmd/done.go`
 
-# Expand implement with rule-of-five
-[compose]
-[[compose.expand]]
-target = "implement"
-with = "rule-of-five"
+```go
+// gt validate --check=lint --check=test
+func runValidate(checks []string) error {
+    for _, check := range checks {
+        if err := runCheck(check); err != nil {
+            return fmt.Errorf("%s failed: %w", check, err)
+        }
+    }
+    return nil
+}
 
-# Add review convoy after implementation
-[[steps]]
-id = "code-review"
-title = "Automated Code Review"
-needs = ["implement.refine-4"]  # After rule-of-five completion
-convoy = "code-review"
-preset = "gate"
+// In done.go:
+func runDone() error {
+    // Run validation before MR creation
+    if err := runValidate(rigConfig.RequiredChecks); err != nil {
+        return fmt.Errorf("validation failed: %w\n\nRun `gt validate` to see details")
+    }
+    // ... proceed with MR creation
+}
+```
 
-# Add human gate for review approval
-[[steps]]
-id = "review-approval"
-title = "Review Approval"
-needs = ["code-review"]
-gate = { type = "human" }
+### 5. Default Formula Config
 
-# Test after review approved
-[[steps]]
-id = "test"
-title = "Test {{feature}}"
-needs = ["review-approval"]
+**File**: `internal/rig/config.go`
 
-# Final submit
-[[steps]]
-id = "submit"
-title = "Submit for merge"
-needs = ["test"]
+```go
+type RigConfig struct {
+    // ... existing fields
+    DefaultFormula string `json:"default_formula"` // e.g., "shiny"
+    RequiredChecks []string `json:"required_checks"` // e.g., ["lint", "test"]
+}
 ```
 
 ---
 
-## Integration Points Summary
+## Recommended Action Plan
 
-| Hook Point | File | Purpose |
-|------------|------|---------|
-| Pre-MR validation | `cmd/done.go` | Run `gt validate` before MR creation |
-| Molecule step | `formula/` | Connect review step to code-review convoy |
-| MR bead metadata | `beads.MRFields` | Track revision count |
-| Refinery failure | `refinery/engineer.go` | Check revision limit, escalate |
-| Gate system | `cmd/gate.go` | Human approval for review findings |
+### Phase 1: Formula-Only Improvements (No Go Changes)
 
----
+1. **Create custom formulas** in `~/.beads/formulas/`:
+   - `kyle-prd-jam.formula.toml` - PRD creation workflow
+   - `kyle-eng-spec.formula.toml` - Engineering spec + review
+   - `kyle-execute.formula.toml` - Implementation + Ralph loop
 
-## Kyle's claude-life-dev Mapping
+2. **Document the workflow**:
+   ```bash
+   # Example: Run a formula-driven workflow
+   gt formula run shiny --var feature="Add notification system" gastown
+   ```
 
-| Kyle's Process | Gastown Equivalent |
-|----------------|-------------------|
-| `/prd-jam` | Formula `design` step with human gate |
-| `/eng-spec` | Formula `design` step output (design doc) |
-| `/execute` | Formula `implement` step (with rule-of-five) |
-| Memory MCP | Beads (persistent state) + hooks (session context) |
-| Triple redundancy | Beads + role templates + git |
-| PR Review Cycle | `code-review` convoy + revision limits |
-| Max 3 revisions | `max_revisions` field + escalation logic |
+### Phase 2: Discoverability Fixes (Go Changes)
 
----
+1. Add `gt config set default-formula <name>` command
+2. Update Witness to check default formula when dispatching
+3. Add `gt formula --help` improvements showing workflow examples
 
-## Recommended Next Steps
+### Phase 3: Validation Infrastructure (Go Changes)
 
-1. **Quick Win**: Configure `test_command` in gastown's rig config to enable test validation in Refinery
+1. Add `[steps.validate]` to formula schema
+2. Implement step validator in formula runner
+3. Add `gt validate` command with pluggable checks
+4. Integrate validation into `gt done`
 
-2. **Phase 1** (1-2 days): Implement `gt validate` command with pluggable validators
+### Phase 4: Revision Limits (Go Changes)
 
-3. **Phase 2** (1 day): Create `shiny-review.formula.toml` that integrates code-review convoy
-
-4. **Phase 3** (1 day): Add revision tracking to MR beads, escalation in Refinery
-
-5. **Phase 4** (1 day): Create comprehensive enterprise template combining all features
+1. Add `revision_count` to MR beads
+2. Track revisions in Refinery failure handling
+3. Implement escalation logic (mail human, spawn senior agent)
 
 ---
 
-## Files to Modify
+## Open Questions
 
-| File | Changes |
-|------|---------|
-| `internal/cmd/validate.go` | New command (create) |
-| `internal/cmd/done.go` | Add validation gate |
-| `internal/refinery/engineer.go` | Add revision tracking + escalation |
-| `internal/formula/formulas/shiny-review.formula.toml` | New formula (create) |
-| `internal/beads/types.go` | Add revision fields to MRFields |
+1. **Where should default formula be configured?**
+   - Per-rig in `config.json`?
+   - Per-user in `~/.beads/config.yaml`?
+   - Per-issue via labels?
 
----
+2. **What triggers formula usage?**
+   - `gt sling --formula <name>` (explicit)
+   - Auto-detect from issue type/labels (implicit)
+   - Always use rig default (enforced)
 
-## Open Questions for Kyle
+3. **Step validation failure actions:**
+   - Stop work entirely?
+   - Mail Witness and wait?
+   - Create a sub-task and block?
 
-1. **Validation strictness**: Should validators block `gt done` by default, or warn-only?
-
-2. **Escalation target**: When revision limit hit, escalate to human, Mayor, or specific agent?
-
-3. **Review coverage**: Should `gate` preset (4 legs) be default, or `full` preset (10 legs)?
-
-4. **Human gates**: Where in the workflow should human approval be required?
-   - After design?
-   - After review findings?
-   - Before merge?
-   - All of the above?
-
-5. **Formula activation**: Should `shiny-review` be the default for `gt sling`, or opt-in?
+4. **Revision escalation targets:**
+   - Human (Kyle)
+   - Mayor
+   - Senior polecat (if such concept exists)
+   - External system (GitHub issue, etc.)
