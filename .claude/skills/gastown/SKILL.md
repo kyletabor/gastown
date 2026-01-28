@@ -4,10 +4,6 @@ description: >
   Multi-agent orchestration system for coordinating Claude Code instances across projects.
   Use when working in a Gas Town environment, managing polecats/crew, using gt/bd commands,
   understanding convoys, molecules, or the propulsion principle.
-allowed-tools: "Bash(gt:*),Bash(bd:*)"
-version: "1.0.0"
-author: "Gas Town"
-license: "MIT"
 ---
 
 # Gas Town - Multi-Agent Orchestration for Claude Code
