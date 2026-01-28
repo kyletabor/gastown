@@ -1,0 +1,19 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "gastown-plugins",
+  "description": "Gas Town multi-agent orchestration plugins for Claude Code",
+  "owner": {
+    "name": "Kyle Tabor",
+    "url": "https://github.com/kyletabor"
+  },
+  "plugins": [
+    {
+      "name": "gastown",
+      "source": ".",
+      "description": "Multi-agent orchestration system for coordinating Claude Code instances",
+      "version": "1.0.0",
+      "category": "development",
+      "tags": ["multi-agent", "orchestration", "beads", "convoys", "molecules"]
+    }
+  ]
+}
