@@ -1,6 +1,8 @@
 # Convoys - Work Tracking in Gas Town
 
-A **convoy** is how you track batched work in Gas Town. When you kick off work - even a single issue - create a convoy to track it.
+> **Note**: This documents **work convoys** (`gt convoy`). For **formula convoys** (`type = "convoy"` in formulas), see [formulas.md](formulas.md).
+
+A **work convoy** is how you track batched work in Gas Town. When you kick off work - even a single issue - create a convoy to track it.
 
 ## Why Convoys Matter
 

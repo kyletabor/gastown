@@ -92,6 +92,48 @@ See [references/commands.md](references/commands.md) for full CLI reference.
 
 See [references/molecules.md](references/molecules.md) for workflow details.
 
+## ⚠️ Terminology: "Convoy" Has Two Meanings
+
+**IMPORTANT**: The word "convoy" refers to TWO completely different concepts:
+
+| Context | What It Is | Command | File/Bead Type |
+|---------|-----------|---------|----------------|
+| **Formula convoy** | Parallel execution pattern in Beads formulas | `bd mol pour <formula>` | `.formula.toml` with `type = "convoy"` |
+| **Work convoy** | Issue tracking unit in Gastown | `gt convoy create` | `hq-cv-*` bead |
+
+### Formula Convoy (Beads Concept)
+- **Purpose**: Execute multiple tasks in parallel, then synthesize results
+- **Structure**: Multiple `[[legs]]` + one `[synthesis]` step
+- **Example**: `code-review.formula.toml` - 10 reviewers analyze code in parallel, synthesis combines findings
+- **Used in**: Multi-perspective analysis (design exploration, code review, architecture options)
+
+### Work Convoy (Gastown Concept)
+- **Purpose**: Track batch of related issues across rigs for visibility
+- **Structure**: Single `hq-cv-*` bead that tracks multiple issue IDs
+- **Example**: `gt convoy create "Feature X" gt-abc gt-def` - dashboard shows progress
+- **Used in**: Monitoring work completion, cross-rig coordination, notifications
+
+### How They Can Work Together
+A formula convoy can create issues that get tracked by a work convoy:
+
+```bash
+# 1. Pour a convoy formula (parallel design exploration)
+bd mol pour design-convoy --var feature="auth"
+# Creates: design.explore-1, design.explore-2, design.arch, design.synthesis
+
+# 2. Create work convoy to track all those issues
+gt convoy create "Design: Auth feature" design.explore-1 design.explore-2 design.arch design.synthesis
+
+# 3. Sling each leg to spawn polecats
+gt sling design.explore-1 gastown
+gt sling design.explore-2 gastown
+# etc.
+
+# 4. gt convoy status shows progress across all legs
+```
+
+**Bottom line**: They're separate layers. Formula convoy = execution pattern. Work convoy = tracking mechanism.
+
 ## Directory Structure
 
 ```
@@ -141,6 +183,7 @@ When context fills or you finish a chunk:
 |----------|---------|
 | [roles.md](references/roles.md) | Detailed role documentation |
 | [convoys.md](references/convoys.md) | Work tracking and assignment |
+| [formulas.md](references/formulas.md) | Formula types and patterns |
 | [molecules.md](references/molecules.md) | Formulas and workflow lifecycle |
 | [propulsion.md](references/propulsion.md) | The propulsion principle deep dive |
 | [commands.md](references/commands.md) | Full CLI reference |
