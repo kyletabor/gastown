@@ -418,6 +418,80 @@ func (t *Tmux) KillPaneProcesses(pane string) error {
 	return nil
 }
 
+// KillPaneProcessesExcluding is like KillPaneProcesses but excludes specified PIDs
+// from being killed. This is essential for self-respawn scenarios where the calling
+// process (e.g., gt handoff) is running inside the pane it's trying to respawn.
+// Without exclusion, the caller would be killed before completing the respawn.
+func (t *Tmux) KillPaneProcessesExcluding(pane string, excludePIDs []string) error {
+	// Build exclusion set for O(1) lookup
+	exclude := make(map[string]bool)
+	for _, pid := range excludePIDs {
+		exclude[pid] = true
+	}
+
+	// Get the pane PID
+	pid, err := t.GetPanePID(pane)
+	if err != nil {
+		return fmt.Errorf("getting pane PID: %w", err)
+	}
+
+	if pid == "" {
+		return fmt.Errorf("pane PID is empty")
+	}
+
+	// Get the process group ID
+	pgid := getProcessGroupID(pid)
+
+	// Collect all PIDs to kill (from multiple sources)
+	toKill := make(map[string]bool)
+
+	// 1. Get all process group members (catches reparented processes)
+	if pgid != "" && pgid != "0" && pgid != "1" {
+		for _, member := range getProcessGroupMembers(pgid) {
+			if !exclude[member] {
+				toKill[member] = true
+			}
+		}
+	}
+
+	// 2. Get all descendant PIDs recursively (catches processes that called setsid())
+	descendants := getAllDescendants(pid)
+	for _, dpid := range descendants {
+		if !exclude[dpid] {
+			toKill[dpid] = true
+		}
+	}
+
+	// Convert to slice for iteration
+	var killList []string
+	for p := range toKill {
+		killList = append(killList, p)
+	}
+
+	// Send SIGTERM to all non-excluded processes
+	for _, dpid := range killList {
+		_ = exec.Command("kill", "-TERM", dpid).Run()
+	}
+
+	// Wait for graceful shutdown (2s gives processes time to clean up)
+	time.Sleep(processKillGracePeriod)
+
+	// Send SIGKILL to any remaining non-excluded processes
+	for _, dpid := range killList {
+		_ = exec.Command("kill", "-KILL", dpid).Run()
+	}
+
+	// Kill the pane process itself (may have called setsid() and detached)
+	// Only if not excluded
+	if !exclude[pid] {
+		_ = exec.Command("kill", "-TERM", pid).Run()
+		time.Sleep(processKillGracePeriod)
+		_ = exec.Command("kill", "-KILL", pid).Run()
+	}
+
+	return nil
+}
+
 // KillServer terminates the entire tmux server and all sessions.
 func (t *Tmux) KillServer() error {
 	_, err := t.run("kill-server")
