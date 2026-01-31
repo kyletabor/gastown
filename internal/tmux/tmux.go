@@ -372,6 +372,20 @@ func getProcessGroupMembers(pgid string) []string {
 // This ensures Claude processes and all their children are properly terminated
 // before respawning the pane.
 func (t *Tmux) KillPaneProcesses(pane string) error {
+	return t.KillPaneProcessesExcluding(pane, nil)
+}
+
+// KillPaneProcessesExcluding is like KillPaneProcesses but excludes specified PIDs
+// from being killed. This is essential for self-kill scenarios where the calling
+// process (e.g., gt handoff) is running inside the pane it's terminating.
+// Without exclusion, the caller would be killed before completing the cleanup.
+func (t *Tmux) KillPaneProcessesExcluding(pane string, excludePIDs []string) error {
+	// Build exclusion set for O(1) lookup
+	exclude := make(map[string]bool)
+	for _, pid := range excludePIDs {
+		exclude[pid] = true
+	}
+
 	// Get the pane PID
 	pid, err := t.GetPanePID(pane)
 	if err != nil {
@@ -382,38 +396,54 @@ func (t *Tmux) KillPaneProcesses(pane string) error {
 		return fmt.Errorf("pane PID is empty")
 	}
 
-	// First, kill the entire process group. This catches processes that:
-	// - Reparented to init (PID 1) when their parent died
-	// - Are not direct children but stayed in the same process group
+	// Collect all PIDs to kill (from multiple sources)
+	toKill := make(map[string]bool)
+
+	// 1. Get process group members (catches reparented processes)
 	pgid := getProcessGroupID(pid)
 	if pgid != "" && pgid != "0" && pgid != "1" {
-		// Kill process group with negative PGID (POSIX convention)
-		_ = exec.Command("kill", "-TERM", "-"+pgid).Run()
-		time.Sleep(100 * time.Millisecond)
-		_ = exec.Command("kill", "-KILL", "-"+pgid).Run()
+		for _, member := range getProcessGroupMembers(pgid) {
+			if !exclude[member] {
+				toKill[member] = true
+			}
+		}
 	}
 
-	// Also walk the process tree for any descendants that might have called setsid()
+	// 2. Get all descendant PIDs recursively (catches processes that called setsid())
 	descendants := getAllDescendants(pid)
-
-	// Send SIGTERM to all descendants (deepest first to avoid orphaning)
 	for _, dpid := range descendants {
+		if !exclude[dpid] {
+			toKill[dpid] = true
+		}
+	}
+
+	// Convert to slice for iteration
+	var killList []string
+	for p := range toKill {
+		killList = append(killList, p)
+	}
+
+	// Send SIGTERM to all non-excluded processes
+	for _, dpid := range killList {
 		_ = exec.Command("kill", "-TERM", dpid).Run()
 	}
 
 	// Wait for graceful shutdown (2s gives processes time to clean up)
 	time.Sleep(processKillGracePeriod)
 
-	// Send SIGKILL to any remaining descendants
-	for _, dpid := range descendants {
+	// Send SIGKILL to any remaining non-excluded processes
+	for _, dpid := range killList {
 		_ = exec.Command("kill", "-KILL", dpid).Run()
 	}
 
 	// Kill the pane process itself (may have called setsid() and detached,
 	// or may have no children like Claude Code)
-	_ = exec.Command("kill", "-TERM", pid).Run()
-	time.Sleep(processKillGracePeriod)
-	_ = exec.Command("kill", "-KILL", pid).Run()
+	// Only if not excluded
+	if !exclude[pid] {
+		_ = exec.Command("kill", "-TERM", pid).Run()
+		time.Sleep(processKillGracePeriod)
+		_ = exec.Command("kill", "-KILL", pid).Run()
+	}
 
 	return nil
 }
