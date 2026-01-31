@@ -8,8 +8,10 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/steveyegge/gastown/internal/config"
@@ -153,6 +155,39 @@ func (t *Tmux) KillSession(name string) error {
 // and caused Claude processes to become orphans when they couldn't shut down in time.
 const processKillGracePeriod = 2 * time.Second
 
+// killPID sends a signal to a specific process ID.
+// Uses syscall.Kill directly instead of exec.Command("kill", ...) to avoid
+// unexpected signal delivery issues that can cause the caller to be killed.
+// Returns nil on success or if the process doesn't exist (ESRCH).
+func killPID(pid string, sig syscall.Signal) error {
+	pidInt, err := strconv.Atoi(strings.TrimSpace(pid))
+	if err != nil {
+		return err
+	}
+	err = syscall.Kill(pidInt, sig)
+	// ESRCH means process doesn't exist - not an error for our purposes
+	if err == syscall.ESRCH {
+		return nil
+	}
+	return err
+}
+
+// killProcessGroup sends a signal to all processes in a process group.
+// Uses syscall.Kill with negative PGID (POSIX convention for process groups).
+// Returns nil on success or if the process group doesn't exist (ESRCH).
+func killProcessGroup(pgid string, sig syscall.Signal) error {
+	pgidInt, err := strconv.Atoi(strings.TrimSpace(pgid))
+	if err != nil {
+		return err
+	}
+	err = syscall.Kill(-pgidInt, sig)
+	// ESRCH means process group doesn't exist - not an error for our purposes
+	if err == syscall.ESRCH {
+		return nil
+	}
+	return err
+}
+
 // KillSessionWithProcesses explicitly kills all processes in a session before terminating it.
 // This prevents orphan processes that survive tmux kill-session due to SIGHUP being ignored.
 //
@@ -187,10 +222,10 @@ func (t *Tmux) KillSessionWithProcesses(name string) error {
 		if pgid != "" && pgid != "0" && pgid != "1" {
 			// Kill process group with negative PGID (POSIX convention)
 			// Use SIGTERM first for graceful shutdown
-			_ = exec.Command("kill", "-TERM", "-"+pgid).Run()
+			_ = killProcessGroup(pgid, syscall.SIGTERM)
 			time.Sleep(100 * time.Millisecond)
 			// Force kill any remaining processes in the group
-			_ = exec.Command("kill", "-KILL", "-"+pgid).Run()
+			_ = killProcessGroup(pgid, syscall.SIGKILL)
 		}
 
 		// Also walk the process tree for any descendants that might have called setsid()
@@ -199,7 +234,7 @@ func (t *Tmux) KillSessionWithProcesses(name string) error {
 
 		// Send SIGTERM to all descendants (deepest first to avoid orphaning)
 		for _, dpid := range descendants {
-			_ = exec.Command("kill", "-TERM", dpid).Run()
+			_ = killPID(dpid, syscall.SIGTERM)
 		}
 
 		// Wait for graceful shutdown (2s gives processes time to clean up)
@@ -207,13 +242,13 @@ func (t *Tmux) KillSessionWithProcesses(name string) error {
 
 		// Send SIGKILL to any remaining descendants
 		for _, dpid := range descendants {
-			_ = exec.Command("kill", "-KILL", dpid).Run()
+			_ = killPID(dpid, syscall.SIGKILL)
 		}
 
 		// Kill the pane process itself (may have called setsid() and detached)
-		_ = exec.Command("kill", "-TERM", pid).Run()
+		_ = killPID(pid, syscall.SIGTERM)
 		time.Sleep(processKillGracePeriod)
-		_ = exec.Command("kill", "-KILL", pid).Run()
+		_ = killPID(pid, syscall.SIGKILL)
 	}
 
 	// Kill the tmux session
@@ -276,7 +311,7 @@ func (t *Tmux) KillSessionWithProcessesExcluding(name string, excludePIDs []stri
 
 		// Send SIGTERM to all non-excluded processes
 		for _, dpid := range killList {
-			_ = exec.Command("kill", "-TERM", dpid).Run()
+			_ = killPID(dpid, syscall.SIGTERM)
 		}
 
 		// Wait for graceful shutdown (2s gives processes time to clean up)
@@ -284,15 +319,15 @@ func (t *Tmux) KillSessionWithProcessesExcluding(name string, excludePIDs []stri
 
 		// Send SIGKILL to any remaining non-excluded processes
 		for _, dpid := range killList {
-			_ = exec.Command("kill", "-KILL", dpid).Run()
+			_ = killPID(dpid, syscall.SIGKILL)
 		}
 
 		// Kill the pane process itself (may have called setsid() and detached)
 		// Only if not excluded
 		if !exclude[pid] {
-			_ = exec.Command("kill", "-TERM", pid).Run()
+			_ = killPID(pid, syscall.SIGTERM)
 			time.Sleep(processKillGracePeriod)
-			_ = exec.Command("kill", "-KILL", pid).Run()
+			_ = killPID(pid, syscall.SIGKILL)
 		}
 	}
 
@@ -388,9 +423,9 @@ func (t *Tmux) KillPaneProcesses(pane string) error {
 	pgid := getProcessGroupID(pid)
 	if pgid != "" && pgid != "0" && pgid != "1" {
 		// Kill process group with negative PGID (POSIX convention)
-		_ = exec.Command("kill", "-TERM", "-"+pgid).Run()
+		_ = killProcessGroup(pgid, syscall.SIGTERM)
 		time.Sleep(100 * time.Millisecond)
-		_ = exec.Command("kill", "-KILL", "-"+pgid).Run()
+		_ = killProcessGroup(pgid, syscall.SIGKILL)
 	}
 
 	// Also walk the process tree for any descendants that might have called setsid()
@@ -398,7 +433,7 @@ func (t *Tmux) KillPaneProcesses(pane string) error {
 
 	// Send SIGTERM to all descendants (deepest first to avoid orphaning)
 	for _, dpid := range descendants {
-		_ = exec.Command("kill", "-TERM", dpid).Run()
+		_ = killPID(dpid, syscall.SIGTERM)
 	}
 
 	// Wait for graceful shutdown (2s gives processes time to clean up)
@@ -406,14 +441,14 @@ func (t *Tmux) KillPaneProcesses(pane string) error {
 
 	// Send SIGKILL to any remaining descendants
 	for _, dpid := range descendants {
-		_ = exec.Command("kill", "-KILL", dpid).Run()
+		_ = killPID(dpid, syscall.SIGKILL)
 	}
 
 	// Kill the pane process itself (may have called setsid() and detached,
 	// or may have no children like Claude Code)
-	_ = exec.Command("kill", "-TERM", pid).Run()
+	_ = killPID(pid, syscall.SIGTERM)
 	time.Sleep(processKillGracePeriod)
-	_ = exec.Command("kill", "-KILL", pid).Run()
+	_ = killPID(pid, syscall.SIGKILL)
 
 	return nil
 }
