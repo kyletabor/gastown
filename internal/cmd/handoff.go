@@ -206,7 +206,13 @@ func runHandoff(cmd *cobra.Command, args []string) error {
 
 	// Kill all processes in the pane before respawning to prevent orphan leaks
 	// RespawnPane's -k flag only sends SIGHUP which Claude/Node may ignore
-	if err := t.KillPaneProcesses(pane); err != nil {
+	//
+	// CRITICAL: We must exclude ourselves from being killed, otherwise we die
+	// before calling RespawnPane. The bug (gt-9zo) was that KillPaneProcesses
+	// sends SIGTERM to the entire process group, which includes gt handoff itself
+	// since it's a child of Claude and inherits the same PGID.
+	myPID := fmt.Sprintf("%d", os.Getpid())
+	if err := t.KillPaneProcessesExcluding(pane, []string{myPID}); err != nil {
 		// Non-fatal but log the warning
 		style.PrintWarning("could not kill pane processes: %v", err)
 	}
