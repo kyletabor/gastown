@@ -505,7 +505,7 @@ func (t *Tmux) KillPaneProcessesExcluding(pane string, excludePIDs []string) err
 
 	// Send SIGTERM to all non-excluded processes
 	for _, dpid := range killList {
-		_ = exec.Command("kill", "-TERM", dpid).Run()
+		_ = killPID(dpid, syscall.SIGTERM)
 	}
 
 	// Wait for graceful shutdown (2s gives processes time to clean up)
@@ -513,15 +513,15 @@ func (t *Tmux) KillPaneProcessesExcluding(pane string, excludePIDs []string) err
 
 	// Send SIGKILL to any remaining non-excluded processes
 	for _, dpid := range killList {
-		_ = exec.Command("kill", "-KILL", dpid).Run()
+		_ = killPID(dpid, syscall.SIGKILL)
 	}
 
 	// Kill the pane process itself (may have called setsid() and detached)
 	// Only if not excluded
 	if !exclude[pid] {
-		_ = exec.Command("kill", "-TERM", pid).Run()
+		_ = killPID(pid, syscall.SIGTERM)
 		time.Sleep(processKillGracePeriod)
-		_ = exec.Command("kill", "-KILL", pid).Run()
+		_ = killPID(pid, syscall.SIGKILL)
 	}
 
 	return nil
