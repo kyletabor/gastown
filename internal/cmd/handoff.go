@@ -212,8 +212,14 @@ func runHandoff(cmd *cobra.Command, args []string) error {
 		style.PrintWarning("could not kill pane processes: %v", err)
 	}
 
-	// Use exec to respawn the pane - this kills us and restarts
-	return t.RespawnPane(pane, restartCmd)
+	// Self-handoff: use async respawn pattern to survive our own death.
+	// The problem: tmux respawn-pane -k kills us mid-execution, creating a race
+	// where we might die before the respawn is properly queued.
+	//
+	// Solution: Write restart command to a script, schedule respawn in tmux's
+	// background job queue, then exit cleanly. The background job survives our
+	// death and executes the respawn after we're gone.
+	return asyncRespawnAndExit(t, pane, restartCmd)
 }
 
 // getCurrentTmuxSession returns the current tmux session name.
@@ -759,6 +765,54 @@ func hookBeadForHandoff(beadID string) error {
 	}
 
 	fmt.Printf("%s Work attached to hook (pinned bead)\n", style.Bold.Render("✓"))
+	return nil
+}
+
+// asyncRespawnAndExit schedules a pane respawn in tmux's background job queue,
+// then exits cleanly. This pattern ensures the respawn happens even if we die
+// during the handoff process.
+//
+// The flow:
+// 1. Write restart command to a script file (avoids shell escaping issues)
+// 2. Schedule respawn via `tmux run-shell -b` (runs in tmux's background queue)
+// 3. Exit cleanly - the background job respawns the pane after we're gone
+//
+// This solves the race condition where `tmux respawn-pane -k` kills us before
+// the command is fully processed. By using run-shell -b with a small delay,
+// we ensure the respawn is queued before we exit.
+func asyncRespawnAndExit(t *tmux.Tmux, pane, restartCmd string) error {
+	// Get runtime directory for the script
+	cwd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("getting cwd: %w", err)
+	}
+	runtimeDir := filepath.Join(cwd, constants.DirRuntime)
+	if err := os.MkdirAll(runtimeDir, 0755); err != nil {
+		return fmt.Errorf("creating runtime dir: %w", err)
+	}
+
+	// Write the restart command to a script file
+	// This avoids shell escaping issues with the complex restart command
+	scriptPath := filepath.Join(runtimeDir, "restart.sh")
+	scriptContent := fmt.Sprintf("#!/bin/bash\n%s\n", restartCmd)
+	if err := os.WriteFile(scriptPath, []byte(scriptContent), 0755); err != nil {
+		return fmt.Errorf("writing restart script: %w", err)
+	}
+
+	// Schedule respawn in tmux's background job queue.
+	// The sleep ensures we exit before the respawn kills us.
+	// Using run-shell -b runs the command asynchronously in tmux's job queue,
+	// which survives our process dying.
+	// Quote scriptPath in case the working directory contains spaces.
+	bgCmd := fmt.Sprintf("sleep 0.1 && tmux respawn-pane -k -t %s '%s'", pane, scriptPath)
+	if err := t.RunShellBackground(bgCmd); err != nil {
+		return fmt.Errorf("scheduling respawn: %w", err)
+	}
+
+	// Exit cleanly - the background job will respawn us
+	// Note: we don't call os.Exit() directly because we want proper defer cleanup
+	// and to let the caller handle any final cleanup. The caller should return
+	// nil to signal success, and the process will naturally exit.
 	return nil
 }
 

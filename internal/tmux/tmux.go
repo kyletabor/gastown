@@ -1486,6 +1486,14 @@ func (t *Tmux) RespawnPane(pane, command string) error {
 	return err
 }
 
+// RunShellBackground runs a command in tmux's background job queue.
+// The -b flag makes run-shell return immediately without waiting for the command.
+// This is useful for scheduling commands that should survive the caller's death.
+func (t *Tmux) RunShellBackground(command string) error {
+	_, err := t.run("run-shell", "-b", command)
+	return err
+}
+
 // ClearHistory clears the scrollback history buffer for a pane.
 // This resets copy-mode display from [0/N] to [0/0].
 // The pane parameter should be a pane ID (e.g., "%0") or session:window.pane format.

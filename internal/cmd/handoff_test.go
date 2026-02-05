@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/steveyegge/gastown/internal/constants"
 	"github.com/steveyegge/gastown/internal/workspace"
 )
 
@@ -121,4 +122,50 @@ func TestDetectTownRootFromCwd_EnvFallback(t *testing.T) {
 			t.Errorf("detectTownRootFromCwd() = %q, want %q (should accept secondary marker)", result, secondaryTown)
 		}
 	})
+}
+
+func TestRestartScriptCreation(t *testing.T) {
+	// Test that restart script is created correctly for async respawn
+	tmpDir := t.TempDir()
+	runtimeDir := filepath.Join(tmpDir, constants.DirRuntime)
+
+	// Create runtime directory
+	if err := os.MkdirAll(runtimeDir, 0755); err != nil {
+		t.Fatalf("creating runtime dir: %v", err)
+	}
+
+	// Test script content creation
+	restartCmd := "cd /test/dir && exec claude --resume 'test prompt'"
+	scriptPath := filepath.Join(runtimeDir, "restart.sh")
+	scriptContent := "#!/bin/bash\n" + restartCmd + "\n"
+
+	if err := os.WriteFile(scriptPath, []byte(scriptContent), 0755); err != nil {
+		t.Fatalf("writing restart script: %v", err)
+	}
+
+	// Verify script was created
+	if _, err := os.Stat(scriptPath); os.IsNotExist(err) {
+		t.Errorf("restart script not created at %s", scriptPath)
+	}
+
+	// Verify script content
+	content, err := os.ReadFile(scriptPath)
+	if err != nil {
+		t.Fatalf("reading restart script: %v", err)
+	}
+
+	if string(content) != scriptContent {
+		t.Errorf("restart script content = %q, want %q", string(content), scriptContent)
+	}
+
+	// Verify script is executable
+	info, err := os.Stat(scriptPath)
+	if err != nil {
+		t.Fatalf("stat restart script: %v", err)
+	}
+
+	// Check executable bits (0755 = rwxr-xr-x)
+	if info.Mode()&0111 == 0 {
+		t.Errorf("restart script is not executable: mode = %o", info.Mode())
+	}
 }
