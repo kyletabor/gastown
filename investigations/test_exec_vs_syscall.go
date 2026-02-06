@@ -1,3 +1,5 @@
+//go:build !windows
+
 // Test program to compare exec.Command("kill") vs syscall.Kill()
 // This tests Theory B: exec.Command signal propagation issues
 package main
