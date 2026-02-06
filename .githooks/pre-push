@@ -6,6 +6,7 @@
 # Allowed patterns:
 #   main, beads-sync  - Direct work branches
 #   polecat/*         - Polecat working branches (Refinery merges these)
+#   integration/*     - Feature integration branches (epic-scoped, merged to main via UAT)
 
 while read local_ref local_sha remote_ref remote_sha; do
   # Skip tags - they're allowed for releases
@@ -16,7 +17,7 @@ while read local_ref local_sha remote_ref remote_sha; do
   branch="${remote_ref#refs/heads/}"
 
   case "$branch" in
-    main|beads-sync|polecat/*)
+    main|beads-sync|polecat/*|integration/*)
       # Allowed branches
       ;;
     *)
